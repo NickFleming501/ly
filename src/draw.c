@@ -15,6 +15,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/*Added by me*/
+#include <time.h>
+
 #if defined(__DragonFly__) || defined(__FreeBSD__)
 	#include <sys/kbio.h>
 #else // linux
@@ -66,6 +69,7 @@ void draw_init(struct term_buf* buf)
 	buf->box_chars.left = '|';
 	buf->box_chars.right = '|';
 #endif
+	buf->timer = clock();
 }
 
 void draw_free(struct term_buf* buf)
@@ -73,6 +77,7 @@ void draw_free(struct term_buf* buf)
 	if (config.animate)
 	{
 		free(buf->tmp_buf);
+		free(buf->tmp_buf2);
 	}
 }
 
@@ -494,12 +499,38 @@ static void doom_init(struct term_buf* buf)
 	memset(buf->tmp_buf + tmp_len, DOOM_STEPS - 1, buf->width);
 }
 
+static void matrix_init(struct term_buf* buf)
+{
+	buf->init_width = buf->width;
+	buf->init_height = buf->height;
+
+	u16 tmp_len = buf->width * buf->height;
+	buf->tmp_buf = malloc(tmp_len);
+	buf->tmp_buf2 = malloc(tmp_len);
+
+	if (buf->tmp_buf == NULL || buf->tmp_buf2 == NULL)
+	{
+		dgn_throw(DGN_ALLOC);
+	}
+	memset(buf->tmp_buf, 0, tmp_len);
+	memset(buf->tmp_buf2, 0, tmp_len);
+	
+	/*gettimeofday(&(buf->timer), NULL);*/
+	/*buf->timer = time(NULL)*1000;*/
+	buf->timer = 0;
+}
+
 void animate_init(struct term_buf* buf)
 {
 	if (config.animate)
 	{
 		switch(config.animation)
 		{
+			case 1:
+			{
+				matrix_init(buf);
+				break;
+			}
 			default:
 			{
 				doom_init(buf);
@@ -572,6 +603,91 @@ static void doom(struct term_buf* term_buf)
 	}
 }
 
+static void matrix_anim(struct term_buf* term_buf)
+{
+	clock_t now;
+	clock_t old;
+	
+	old = term_buf->timer;
+	
+	now = clock();
+	
+	u16 src;
+	u16 above_src;
+	u16 random;
+	u8 this_length;
+	u8 above_length;
+	u8 above_freshness;
+
+	u16 w = term_buf->init_width;
+	u8* tmp = term_buf->tmp_buf;
+	u8* tmp2 = term_buf->tmp_buf2;
+
+	if ((term_buf->width != term_buf->init_width) || (term_buf->height != term_buf->init_height))
+	{
+		return;
+	}
+	
+	struct tb_cell* buf = tb_cell_buffer();
+
+	if ((double)(now-old) > 8000) {
+		term_buf->timer = now;
+		for (u16 y = term_buf->init_height-1; y > 0; --y)
+		{
+			for (u16 x = 0; x < w; ++x)
+			{
+				src = y * w + x;
+				above_src = (y-1) * w + x;
+				this_length = (tmp[src] & 31);
+				above_length = (tmp[above_src] & 31);
+				above_freshness = ((tmp[above_src] & 224) >> 5);
+				random = rand();
+				if (y == 1) {
+					if (this_length > 0) {
+						tmp[src] = (tmp[src] & 224) | (this_length - 1);
+					} else if ((random & 127) == 127) {
+						tmp[src] = ((((random >> 8) & 3) + 4) << 5) | (((random >> 10) & 15)+10);
+						tmp2[src] = (((random >> 8) & 127) % 90) + 33;
+					}
+				} else {
+					if (above_length > 0 && this_length == 0) {
+						tmp2[src] = ((random & 127) % 90) + 33;
+					}
+					tmp[src] = (tmp[src] & 224) | above_length;
+					tmp[src] = (tmp[src] & 31) | (above_freshness << 5);
+					if (above_freshness > 0) {
+						tmp[above_src] = (tmp[above_src] & 31) | ((above_freshness - 1) << 5);
+					}
+					if (above_length > 0) {
+						if ((random >> 8) > 88) {
+							tmp[above_src] = (tmp[above_src] & 224) | ((above_length - 1));
+						} else if ((random >> 8) < 13) {
+							tmp2[src] = ((random & 127) % 90) + 33;
+						}
+					}
+				}
+			}
+		}
+	}
+	for (u16 x = 0; x < w; ++x)
+	{
+		for (u16 y = 1; y < term_buf->init_height; ++y)
+		{
+			src = y * w + x;
+			if ((tmp[src] & 31) == 0) {
+				buf[src].ch = 32;
+			} else {
+				buf[src].ch = tmp2[src];
+			}
+			if ((tmp[src] & 224) != 0) {
+				buf[src].fg = TB_GREEN | TB_BOLD;
+			} else {
+				buf[src].fg = TB_GREEN;
+			}
+		}
+	}
+}
+
 void animate(struct term_buf* buf)
 {
 	buf->width = tb_width();
@@ -581,6 +697,11 @@ void animate(struct term_buf* buf)
 	{
 		switch(config.animation)
 		{
+			case 1:
+			{
+				matrix_anim(buf);
+				break;
+			}
 			default:
 			{
 				doom(buf);

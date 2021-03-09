@@ -6,6 +6,8 @@
 
 #include "inputs.h"
 
+#include "time.h"
+
 struct box
 {
 	u32 left_up;
@@ -34,6 +36,9 @@ struct term_buf
 	u16 box_height;
 
 	u8* tmp_buf;
+	u8* tmp_buf2;
+
+	clock_t timer;
 };
 
 void draw_init(struct term_buf* buf);
